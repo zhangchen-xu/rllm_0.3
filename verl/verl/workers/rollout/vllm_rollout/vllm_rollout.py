@@ -84,7 +84,7 @@ class vLLMRollout(BaseRollout):
             "tensor parallel size should be less than or equal to the world size"
         self.tensor_parallel_size = tensor_parallel_size
         
-        max_num_batched_tokens = self.config.get('max_num_batched_tokens', 8192)
+        max_num_batched_tokens = self.config.get('max_num_batched_tokens', 32768)
         
         if kwargs.get('train_tp', None) is not None:
             # deployed with megatron
@@ -100,7 +100,7 @@ class vLLMRollout(BaseRollout):
         assert model_hf_config.max_position_embeddings >= config.prompt_length + config.response_length, \
             "model context length should be greater than total sequence length"
         self.inference_engine = LLM(actor_module,
-                                    preemption_mode='recompute',
+                                    #preemption_mode='recompute',
                                     tokenizer=tokenizer,
                                     model_hf_config=model_hf_config,
                                     tensor_parallel_size=tensor_parallel_size,
