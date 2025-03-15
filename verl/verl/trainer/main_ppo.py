@@ -21,7 +21,7 @@ from verl.utils.reward_score import gsm8k, math
 from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 
 
-from deepscaler.rewards.math_reward import deepscaler_reward_fn
+from rllm.rewards.rl_reward import rllm_reward_fn
 
 def _select_rm_score_fn(data_source):
     if data_source == 'openai/gsm8k':
@@ -29,7 +29,7 @@ def _select_rm_score_fn(data_source):
     elif data_source == 'lighteval/MATH':
         return math.compute_score
     else:
-        return deepscaler_reward_fn
+        return rllm_reward_fn
 
 
 class RewardManager():
@@ -90,7 +90,7 @@ class RewardManager():
             return i, score, valid_response_length
 
         # Process items in parallel using ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=96) as executor:
+        with ThreadPoolExecutor(max_workers=48) as executor:
             args = [(i, data[i], already_print_data_sources) for i in range(len(data))]
             results = list(executor.map(process_item, args))
 

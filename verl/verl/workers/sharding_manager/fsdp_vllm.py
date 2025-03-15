@@ -11,7 +11,7 @@
 # WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
 # See the License for the specific language governing permissions and
 # limitations under the License.
-
+import numpy as np
 import os
 import logging
 import torch
@@ -111,10 +111,15 @@ class FSDPVLLMShardingManager(BaseShardingManager):
 
     def preprocess_data(self, data: DataProto) -> DataProto:
         # TODO: Current impl doesn't consider FSDP with torch micro-dp
+        group_size = vllm_ps.get_tensor_model_parallel_world_size()
+        group = vllm_ps.get_tensor_model_parallel_group()
         data.batch = allgather_dict_tensors(data.batch.contiguous(),
-                                            size=vllm_ps.get_tensor_model_parallel_world_size(),
-                                            group=vllm_ps.get_tensor_model_parallel_group(),
+                                            size=group_size,
+                                            group=group,
                                             dim=0)
+        all_non_tensor_batch = [None for _ in range(group_size)]
+        torch.distributed.all_gather_object(all_non_tensor_batch, data.non_tensor_batch, group=group)
+        data.non_tensor_batch = {k: np.concatenate([d[k] for d in all_non_tensor_batch]) for k in data.non_tensor_batch}
 
         return data
 

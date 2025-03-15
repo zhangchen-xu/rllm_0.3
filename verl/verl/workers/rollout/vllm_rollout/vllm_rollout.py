@@ -24,6 +24,8 @@ When working with Megatron:
 - Do inference in tp. pp is treated as additional dp
 - After inference, all the parameters that doesn't belong to this pp rank is freed.
 """
+from copy import deepcopy
+import numpy as np
 from typing import List
 from contextlib import contextmanager
 from omegaconf import DictConfig
@@ -57,7 +59,7 @@ def _pre_process_inputs(pad_token_id, prompt_token_ids: torch.Tensor) -> List[in
 
 class vLLMRollout(BaseRollout):
 
-    def __init__(self, actor_module: nn.Module, config: DictConfig, tokenizer, model_hf_config, **kwargs):
+    def __init__(self, actor_module: nn.Module, config: DictConfig, tokenizer, model_hf_config, reward_fn, val_reward_fn, **kwargs):
         """A vLLM rollout. It requires the module is supported by the vllm.
 
         Args:
@@ -72,6 +74,8 @@ class vLLMRollout(BaseRollout):
         self.config = config
         self.tokenizer = tokenizer
         self.model_hf_config = model_hf_config
+        self.reward_fn = reward_fn
+        self.val_reward_fn = val_reward_fn
         assert not (not config.enforce_eager and config.free_cache_engine), \
             "disable CUDA graph (enforce_eager = False) if free cache engine"
 
@@ -96,6 +100,7 @@ class vLLMRollout(BaseRollout):
         assert model_hf_config.max_position_embeddings >= config.prompt_length + config.response_length, \
             "model context length should be greater than total sequence length"
         self.inference_engine = LLM(actor_module,
+                                    preemption_mode='recompute',
                                     tokenizer=tokenizer,
                                     model_hf_config=model_hf_config,
                                     tensor_parallel_size=tensor_parallel_size,
@@ -167,132 +172,112 @@ class vLLMRollout(BaseRollout):
         Raises:
             RuntimeError: If generation fails after max_retries attempts.
         """
-        max_retries = int(max_retries)
-        for attempt in range(max_retries):
-            try:
-                # Rebuild vLLM cache engine if configured
-                if self.config.free_cache_engine:
-                    self.inference_engine.init_cache_engine()
+        # Rebuild vLLM cache engine if configured
+        if self.config.free_cache_engine:
+            self.inference_engine.init_cache_engine()
+        # Extract input tensors from prompt batch
+        idx = prompts.batch['input_ids']
+        attention_mask = prompts.batch['attention_mask']
+        position_ids = prompts.batch['position_ids']
+        eos_token_id = prompts.meta_info['eos_token_id']
+        batch_size = idx.size(0)
 
-                # Extract input tensors from prompt batch
-                idx = prompts.batch['input_ids']
-                attention_mask = prompts.batch['attention_mask']
-                position_ids = prompts.batch['position_ids']
-                eos_token_id = prompts.meta_info['eos_token_id']
-                batch_size = idx.size(0)
+        # Pre-process input token ids
+        idx_list = [
+            _pre_process_inputs(self.pad_token_id, idx[i])
+            for i in range(batch_size)
+        ]
 
-                # Pre-process input token ids
-                idx_list = [
-                    _pre_process_inputs(self.pad_token_id, idx[i])
-                    for i in range(batch_size)
-                ]
+        # Configure sampling parameters
+        do_sample = prompts.meta_info.get('do_sample', True)
+        if not do_sample:
+            kwargs = {
+                'best_of': 1,
+                'top_p': 1.0,
+                'top_k': -1,
+                'min_p': 0.0,
+                'temperature': 0,
+                'n': 1
+            }
+        is_validation = False
+        if prompts.meta_info.get('val_temperature', None):
+            kwargs['temperature'] = prompts.meta_info['val_temperature']
+            is_validation = True
+        # Generate sequences
+        with self.update_sampling_params(**kwargs):
+            output = self.inference_engine.generate(
+                prompts=None,
+                sampling_params=self.sampling_params,
+                prompt_token_ids=idx_list,
+                use_tqdm=False)
 
-                # Configure sampling parameters
-                do_sample = prompts.meta_info.get('do_sample', True)
-                if not do_sample:
-                    kwargs = {
-                        'best_of': 1,
-                        'top_p': 1.0,
-                        'top_k': -1,
-                        'min_p': 0.0,
-                        'temperature': 0,
-                        'n': 1
-                    }
-                if prompts.meta_info.get('val_temperature', None):
-                    kwargs['temperature'] = prompts.meta_info['val_temperature']
-                # Generate sequences
-                with self.update_sampling_params(**kwargs):
-                    output = self.inference_engine.generate(
-                        prompts=None,
-                        sampling_params=self.sampling_params,
-                        prompt_token_ids=idx_list,
-                        use_tqdm=False)
+        # Process outputs
+        response = output[0].to(idx.device)
+        log_probs = output[1].to(idx.device)
 
-                # Process outputs
-                response = output[0].to(idx.device)
-                log_probs = output[1].to(idx.device)
+        # Pad sequences if needed
+        if response.shape[1] < self.config.response_length:
+            response = pad_sequence_to_length(
+                response, self.config.response_length, self.pad_token_id)
+            log_probs = pad_sequence_to_length(
+                log_probs, self.config.response_length, self.pad_token_id)
 
-                # Pad sequences if needed
-                if response.shape[1] < self.config.response_length:
-                    response = pad_sequence_to_length(
-                        response, self.config.response_length, self.pad_token_id)
-                    log_probs = pad_sequence_to_length(
-                        log_probs, self.config.response_length, self.pad_token_id)
+        # Handle multiple samples per prompt
+        non_tensor_batch = deepcopy(prompts.non_tensor_batch)
+        if self.config.n > 1 and do_sample:
+            idx = idx.repeat_interleave(self.config.n, dim=0)
+            attention_mask = attention_mask.repeat_interleave(
+                self.config.n, dim=0)
+            position_ids = position_ids.repeat_interleave(
+                self.config.n, dim=0)
+            batch_size = batch_size * self.config.n
+                # Create interleaved non_tensor_batch
+            non_tensor_batch = {}
+            for key, val in prompts.non_tensor_batch.items():
+                # Repeat each element n times (interleaved)
+                repeated_val = np.repeat(val, self.config.n)
+                non_tensor_batch[key] = repeated_val
 
-                # Handle multiple samples per prompt
-                if self.config.n > 1 and do_sample:
-                    idx = idx.repeat_interleave(self.config.n, dim=0)
-                    attention_mask = attention_mask.repeat_interleave(
-                        self.config.n, dim=0)
-                    position_ids = position_ids.repeat_interleave(
-                        self.config.n, dim=0)
-                    batch_size = batch_size * self.config.n
+        # Concatenate prompt and response
+        seq = torch.cat([idx, response], dim=-1)
 
-                # Concatenate prompt and response
-                seq = torch.cat([idx, response], dim=-1)
+        # Create position IDs and attention mask for full sequence
+        response_length = response.size(1)
+        delta_position_id = torch.arange(
+            1, response_length + 1, device=position_ids.device)
+        delta_position_id = delta_position_id.unsqueeze(0).repeat(
+            batch_size, 1)
 
-                # Create position IDs and attention mask for full sequence
-                response_length = response.size(1)
-                delta_position_id = torch.arange(
-                    1, response_length + 1, device=position_ids.device)
-                delta_position_id = delta_position_id.unsqueeze(0).repeat(
-                    batch_size, 1)
+        response_position_ids = position_ids[:, -1:] + delta_position_id
+        position_ids = torch.cat([position_ids, response_position_ids],
+                                dim=-1)
+        response_attention_mask = get_eos_mask(
+            response_id=response,
+            eos_token=eos_token_id,
+            dtype=attention_mask.dtype)
+        attention_mask = torch.cat(
+            (attention_mask, response_attention_mask), dim=-1)
 
-                response_position_ids = position_ids[:, -1:] + delta_position_id
-                position_ids = torch.cat([position_ids, response_position_ids],
-                                       dim=-1)
-                response_attention_mask = get_eos_mask(
-                    response_id=response,
-                    eos_token=eos_token_id,
-                    dtype=attention_mask.dtype)
-                attention_mask = torch.cat(
-                    (attention_mask, response_attention_mask), dim=-1)
+        # Construct output batch
+        batch = TensorDict(
+            {
+                'prompts': idx,
+                'responses': response,
+                'input_ids': seq,
+                'attention_mask': attention_mask,
+                'position_ids': position_ids
+            },
+            batch_size=batch_size)
 
-                # Construct output batch
-                batch = TensorDict(
-                    {
-                        'prompts': idx,
-                        'responses': response,
-                        'input_ids': seq,
-                        'attention_mask': attention_mask,
-                        'position_ids': position_ids
-                    },
-                    batch_size=batch_size)
+        # Free cache if configured
+        if self.config.free_cache_engine:
+            self.inference_engine.free_cache_engine()
 
-                # Free cache if configured
-                if self.config.free_cache_engine:
-                    self.inference_engine.free_cache_engine()
+        batch = DataProto(batch=batch,
+                            non_tensor_batch=non_tensor_batch,
+                            meta_info=prompts.meta_info)
+        if self.reward_fn is not None and not is_validation:
+            reward_tensor = self.reward_fn(batch)
+            batch.batch['token_level_scores'] = reward_tensor
 
-                return DataProto(batch=batch)
-
-            except Exception as e:
-                traceback.print_exc()
-                print("Restarting vLLM due to error: ", e)
-                print("Retrying...")
-
-                # Clean up and restart engine
-                torch.cuda.empty_cache()
-                if hasattr(self.inference_engine, 'free_cache_engine'):
-                    self.inference_engine.free_cache_engine()
-                del self.inference_engine
-
-                # Reinitialize engine with same parameters
-                self.inference_engine = LLM(
-                    self.actor_module,
-                    tokenizer=self.tokenizer,
-                    model_hf_config=self.model_hf_config,
-                    tensor_parallel_size=self.tensor_parallel_size,
-                    dtype=self.config.dtype,
-                    enforce_eager=self.config.enforce_eager,
-                    gpu_memory_utilization=self.config.gpu_memory_utilization,
-                    skip_tokenizer_init=False,
-                    max_model_len=self.config.prompt_length +
-                    self.config.response_length,
-                    load_format=self.config.load_format)
-                print("vLLM is ready to roll!")
-
-                if attempt < max_retries - 1:
-                    continue
-
-        raise RuntimeError(
-            f"Failed to generate sequences after {max_retries} attempts")
+        return batch

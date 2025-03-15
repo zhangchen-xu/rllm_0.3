@@ -75,7 +75,7 @@ class ActorRolloutRefWorker(Worker):
     or a hybrid engine based on the config.rollout
     """
 
-    def __init__(self, config: DictConfig, role: str):
+    def __init__(self, config: DictConfig, role: str, reward_config: DictConfig):
         super().__init__()
         self.config = config
         import torch.distributed
@@ -86,7 +86,7 @@ class ActorRolloutRefWorker(Worker):
         world_size = torch.distributed.get_world_size()
         # TODO(sgm): support FSDP hybrid shard for larger model
         self.device_mesh = create_device_mesh(world_size=world_size, fsdp_size=self.config.actor.fsdp_config.fsdp_size)
-
+        self.reward_config = reward_config
         # build device mesh for Ulysses Sequence Parallel
         self.ulysses_device_mesh = None
         self.ulysses_sequence_parallel_size = self.config.actor.get('ulysses_sequence_parallel_size', 1)
@@ -280,6 +280,20 @@ class ActorRolloutRefWorker(Worker):
         assert self.world_size % infer_tp == 0, f'rollout world_size: {self.world_size} is not divisible by infer_tp: {infer_tp}'
         rollout_device_mesh = init_device_mesh('cuda', mesh_shape=(dp, infer_tp), mesh_dim_names=['dp', 'infer_tp'])
 
+        self.reward_fn = None
+        self.val_reward_fn = None
+        if self.reward_config is not None and self.config.rollout.compute_reward:
+            reward_manager_name = self.reward_config.get("reward_manager", "naive")
+            if reward_manager_name == 'naive':
+                from verl.workers.reward_manager import NaiveRewardManager
+                reward_manager_cls = NaiveRewardManager
+            else:
+                raise NotImplementedError
+            self.reward_fn = reward_manager_cls(tokenizer=self.tokenizer, num_examine=0)
+            self.val_reward_fn = reward_manager_cls(tokenizer=self.tokenizer, num_examine=1)
+
+
+
         if self.config.rollout.name == 'hf':
             from verl.workers.rollout import HFRollout
             from verl.workers.sharding_manager import BaseShardingManager
@@ -293,7 +307,9 @@ class ActorRolloutRefWorker(Worker):
             rollout = vLLMRollout(actor_module=self.actor_module_fsdp,
                                   config=self.config.rollout,
                                   tokenizer=self.tokenizer,
-                                  model_hf_config=self.actor_model_config)
+                                  model_hf_config=self.actor_model_config,
+                                  reward_fn=self.reward_fn,
+                                  val_reward_fn=self.val_reward_fn)
             log_gpu_memory_usage('After building vllm rollout', logger=None)
             if torch.distributed.get_world_size() == 1:
                 self.config.rollout.load_format = 'dummy_hf'
@@ -426,7 +442,6 @@ class ActorRolloutRefWorker(Worker):
         prompts = prompts.to('cuda')
         # set to False if it is validation
         #recompute_log_prob = prompts.meta_info.get('recompute_log_prob', True)
-
         assert self._is_rollout
         if self._is_offload_param:
             load_fsdp_param_and_grad(module=self.actor_module_fsdp,
@@ -438,7 +453,6 @@ class ActorRolloutRefWorker(Worker):
         prompts.meta_info.update(meta_info)
         with self.rollout_sharding_manager:
             log_gpu_memory_usage('After entering rollout sharding manager', logger=logger)
-
             prompts = self.rollout_sharding_manager.preprocess_data(prompts)
             output = self.rollout.generate_sequences(prompts=prompts)
 
