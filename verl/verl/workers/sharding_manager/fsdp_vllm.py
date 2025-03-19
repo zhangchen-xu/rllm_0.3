@@ -31,6 +31,20 @@ logger = logging.getLogger(__file__)
 logger.setLevel(os.getenv('VERL_PPO_LOGGING_LEVEL', 'WARN'))
 
 
+def all_gather_data_proto(data: DataProto, process_group):
+    # Note that this is an inplace operator just like torch.distributed.all_gather
+    group_size = torch.distributed.get_world_size(group=process_group)
+    assert isinstance(data, DataProto)
+    prev_device = data.batch.device
+    data.batch = data.batch.cuda(device=torch.cuda.current_device())
+    data.batch = allgather_dict_tensors(data.batch.contiguous(), size=group_size, group=process_group, dim=0)
+    data.batch = data.batch.to(prev_device)
+    # all gather non_tensor_batch
+    all_non_tensor_batch = [None for _ in range(group_size)]
+    torch.distributed.all_gather_object(all_non_tensor_batch, data.non_tensor_batch, group=process_group)
+    data.non_tensor_batch = {k: np.concatenate([d[k] for d in all_non_tensor_batch]) for k in data.non_tensor_batch}
+
+
 class FSDPVLLMShardingManager(BaseShardingManager):
 
     def __init__(self,
@@ -54,6 +68,9 @@ class FSDPVLLMShardingManager(BaseShardingManager):
             FSDP.set_state_dict_type(self.module,
                                      state_dict_type=StateDictType.SHARDED_STATE_DICT,
                                      state_dict_config=ShardedStateDictConfig())
+
+        self.tp_size = vllm_ps.get_tensor_model_parallel_world_size()
+        self.tp_rank = vllm_ps.get_tensor_model_parallel_rank()
 
         # Note that torch_random_states may be different on each dp rank
         self.torch_random_states = torch.cuda.get_rng_state()
@@ -110,24 +127,17 @@ class FSDPVLLMShardingManager(BaseShardingManager):
             torch.cuda.set_rng_state(self.torch_random_states)
 
     def preprocess_data(self, data: DataProto) -> DataProto:
-        # TODO: Current impl doesn't consider FSDP with torch micro-dp
-        group_size = vllm_ps.get_tensor_model_parallel_world_size()
+        if self.tp_size == 1:
+            return data
         group = vllm_ps.get_tensor_model_parallel_group()
-        data.batch = allgather_dict_tensors(data.batch.contiguous(),
-                                            size=group_size,
-                                            group=group,
-                                            dim=0)
-        all_non_tensor_batch = [None for _ in range(group_size)]
-        torch.distributed.all_gather_object(all_non_tensor_batch, data.non_tensor_batch, group=group)
-        data.non_tensor_batch = {k: np.concatenate([d[k] for d in all_non_tensor_batch]) for k in data.non_tensor_batch}
-
+        all_gather_data_proto(data=data, process_group=group)
         return data
 
     def postprocess_data(self, data: DataProto) -> DataProto:
         # TODO: Current impl doesn't consider FSDP with torch micro-dp
-        broadcast_dict_tensor(data.batch,
-                              src=vllm_ps.get_tensor_model_parallel_src_rank(),
-                              group=vllm_ps.get_tensor_model_parallel_group())
+        local_world_size = vllm_ps.get_tensor_model_parallel_world_size()
+        src_rank = (torch.distributed.get_rank() // local_world_size) * local_world_size
+        broadcast_dict_tensor(data.batch, src=src_rank, group=vllm_ps.get_tensor_model_parallel_group())
         dp_rank = torch.distributed.get_rank()
         dp_size = torch.distributed.get_world_size()  # not consider torch micro-dp
         tp_size = vllm_ps.get_tensor_model_parallel_world_size()
@@ -136,3 +146,4 @@ class FSDPVLLMShardingManager(BaseShardingManager):
             local_prompts = data.chunk(chunks=tp_size)
             data = local_prompts[dp_rank % tp_size]
         return data
+d

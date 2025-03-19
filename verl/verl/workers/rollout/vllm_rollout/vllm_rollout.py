@@ -100,7 +100,6 @@ class vLLMRollout(BaseRollout):
         assert model_hf_config.max_position_embeddings >= config.prompt_length + config.response_length, \
             "model context length should be greater than total sequence length"
         self.inference_engine = LLM(actor_module,
-                                    #preemption_mode='recompute',
                                     tokenizer=tokenizer,
                                     model_hf_config=model_hf_config,
                                     tensor_parallel_size=tensor_parallel_size,
@@ -112,6 +111,8 @@ class vLLMRollout(BaseRollout):
                                     max_num_batched_tokens=max_num_batched_tokens,
                                     enable_chunked_prefill=config.enable_chunked_prefill,
                                     load_format=config.load_format)
+        self.tensor_parallel_rank = vllm_ps.get_tensor_model_parallel_rank()
+        print(f"Rank {torch.distributed.get_rank()}, TP rank {self.tensor_parallel_rank} initialized vLLM rollout")
         # Offload vllm model to reduce peak memory usage
         self.inference_engine.offload_model_weights()
 
@@ -152,7 +153,7 @@ class vLLMRollout(BaseRollout):
             setattr(self.sampling_params, key, value)
 
     @torch.no_grad()
-    def generate_sequences(self, prompts: DataProto, max_retries: int = 1e9, **kwargs) -> DataProto:
+    def generate_sequences(self, prompts: DataProto,  **kwargs) -> DataProto:
         """Generate sequences using vLLM engine with retry logic for failures.
 
         Args:
@@ -188,12 +189,14 @@ class vLLMRollout(BaseRollout):
             for i in range(batch_size)
         ]
 
+        print(f"Rank {torch.distributed.get_rank()}, TP rank {self.tensor_parallel_rank} `generate_sequence`: BS={len(idx_list)}")
+
         # Configure sampling parameters
         do_sample = prompts.meta_info.get('do_sample', True)
         if not do_sample:
             kwargs = {
                 'best_of': 1,
-                'top_p': 1.0,
+                'top_p': 0.95,
                 'top_k': -1,
                 'min_p': 0.0,
                 'temperature': 0,
@@ -203,6 +206,11 @@ class vLLMRollout(BaseRollout):
         if prompts.meta_info.get('val_temperature', None):
             kwargs['temperature'] = prompts.meta_info['val_temperature']
             is_validation = True
+
+        kwargs['n'] = 1
+        if do_sample:
+            idx_list = [deepcopy(item) for item in idx_list for _ in range(self.config.n)]
+
         # Generate sequences
         with self.update_sampling_params(**kwargs):
             output = self.inference_engine.generate(

@@ -442,16 +442,6 @@ class ActorRolloutRefWorker(Worker):
 
     @register(dispatch_mode=Dispatch.DP_COMPUTE_PROTO)
     def generate_sequences(self, prompts: DataProto):
-        try:
-            os.system('pkill -f "python3 /tmp"')
-        except:
-            pass
-
-        try:
-            os.system('pkill -f "python3 /var/tmp"')
-        except:
-            pass
-        
         prompts = prompts.to('cuda')
         # set to False if it is validation
         #recompute_log_prob = prompts.meta_info.get('recompute_log_prob', True)
