@@ -146,4 +146,3 @@ class FSDPVLLMShardingManager(BaseShardingManager):
             local_prompts = data.chunk(chunks=tp_size)
             data = local_prompts[dp_rank % tp_size]
         return data
-d
