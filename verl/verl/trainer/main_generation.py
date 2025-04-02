@@ -48,7 +48,20 @@ def main(config):
     # Check if output file already exists
     if os.path.exists(config.data.output_path):
         print(f"Output file {config.data.output_path} already exists. Skipping generation and proceeding to evaluation.")
-        dataset = pd.read_parquet(config.data.output_path)
+        try:
+            dataset = pd.read_parquet(config.data.output_path)
+        except Exception as e:
+            # Read json
+            try:
+                import json
+                config.data.output_path = config.data.output_path.replace('.parquet', '.json')
+                with open(config.data.output_path, 'r') as f:
+                    dataset = pd.read_json(f)
+            except Exception as e:
+                # user polars
+                import polars as pl
+                config.data.output_path = config.data.output_path.replace('.json', '.parquet')
+                dataset = pl.read_parquet(config.data.output_path)
     else:
         local_path = copy_local_path_from_hdfs(config.model.path)
         from verl.utils import hf_tokenizer
@@ -58,10 +71,18 @@ def main(config):
             assert config.data.n_samples == 1, 'When temperature=0, n_samples must be 1.'
 
         # read dataset. Note that the dataset should directly contain chat template format (e.g., a list of dictionary)
-        dataset = pd.read_parquet(config.data.path)
-        chat_lst = dataset[config.data.prompt_key].tolist()
-
-        chat_lst = [chat.tolist() for chat in chat_lst]
+        try:
+            dataset = pd.read_parquet(config.data.path)
+            chat_lst = dataset[config.data.prompt_key].tolist()
+            chat_lst = [chat.tolist() for chat in chat_lst]
+        except Exception as e:
+            # Read json
+            import json
+            config.data.path = config.data.path.replace('.parquet', '.json')
+            with open(config.data.path, 'r') as f:
+                dataset = pd.read_json(f)
+            chat_lst = dataset[config.data.prompt_key].tolist()
+            chat_lst = [chat for chat in chat_lst]
 
         tokenizer.padding_side = 'left'
         if tokenizer.pad_token is None:
@@ -168,8 +189,12 @@ def main(config):
         ground_truth = reward_data['ground_truth']
         score_lst = []
         for r in response_lst:
-            score = reward_fn(r, ground_truth)
-            score_lst.append(score)
+            try:
+                score = reward_fn(r, ground_truth)
+                score_lst.append(score)
+            except Exception as e:
+                score = reward_fn(data_source, r, ground_truth)
+                score_lst.append(score)
         max_score = np.max(score_lst)
         total_scores.append(score_lst)
         if max_score == 1:
@@ -214,8 +239,8 @@ def select_reward_fn(data_source):
         from verl.utils.reward_score import math
         return math.compute_score
     else:
-        from deepscaler.rewards.math_reward import deepscaler_reward_fn
-        return deepscaler_reward_fn
+        from rllm.rewards.rl_reward import rllm_reward_fn
+        return rllm_reward_fn
 
 if __name__ == '__main__':
     main()
