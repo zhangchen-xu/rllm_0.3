@@ -233,6 +233,14 @@ def main(config):
     # Print table
     print(tabulate(table_data, headers=['Metric', 'Value'], tablefmt='grid'))
 
+    # Convert boolean values to 0.0 or 1.0
+    total_scores = [[1.0 if val else 0.0 for val in score_list] for score_list in total_scores]
+    # Save the scores to results.json
+    results_path = os.path.join(output_dir, 'results.json')
+    import json
+    with open(results_path, 'w') as f:
+        json.dump(total_scores, f)
+
 # Add the select_reward_fn from main_eval.py
 def select_reward_fn(data_source):
     if data_source == 'lighteval/MATH':
