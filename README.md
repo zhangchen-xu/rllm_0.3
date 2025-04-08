@@ -28,7 +28,7 @@ rLLM is an open-source project to fully democratize reinforcement learning (RL) 
 <div align="center">
 <img src="figures/deepcoder.png" width="60%" />
 
-<sub>*Figure 1: DeepCoder's LiveCodeBench (LCB) score as training progresses. At step 180, context length is extended to 32K. The best 32K checkpoint is used for inference-time scaling to 64K, achieving 60.6% LCB—matching o3-mini's performance. For more details, see our [blog post](https://pretty-radio-b75.notion.site/DeepCoder-A-Fully-Open-Source-14B-Coder-at-O3-mini-Level-1cf81902c14680b3bee5eb349a512a51).*</sub>
+<sub>*DeepCoder's LiveCodeBench (LCB) score as training progresses. At step 180, context length is extended to 32K. The best 32K checkpoint is used for inference-time scaling to 64K, achieving 60.6% LCB—matching o3-mini's performance. For more details, see our [blog post](https://pretty-radio-b75.notion.site/DeepCoder-A-Fully-Open-Source-14B-Coder-at-O3-mini-Level-1cf81902c14680b3bee5eb349a512a51).*</sub>
 </div>
 
 ## Releases  📰
@@ -161,10 +161,10 @@ We also show the validation curve during training:
 <div align="center">
   <img src="figures/deepscaler.png" width="60%" />
 
-  <sub>*Figure 1: DeepScaleR 1.5B model's Pass@1 accuracy on AIME2024 as RL training progresses. At step 1040 and 1520, the context length is extended to 16K and 24K. For more details, see our [blog post](https://pretty-radio-b75.notion.site/DeepScaleR-Surpassing-O1-Preview-with-a-1-5B-Model-by-Scaling-RL-19681902c1468005bed8ca303013a4e2) .*</sub>
+  <sub>*DeepScaleR 1.5B model's Pass@1 accuracy on AIME2024 as RL training progresses. At step 1040 and 1520, the context length is extended to 16K and 24K. For more details, see our [blog post](https://pretty-radio-b75.notion.site/DeepScaleR-Surpassing-O1-Preview-with-a-1-5B-Model-by-Scaling-RL-19681902c1468005bed8ca303013a4e2) .*</sub>
 </div>
 
-## Systems
+## System 🤖
 
 <div align="center">
   <img src="figures/verl_pipeline.png" width="60%" />
@@ -172,7 +172,9 @@ We also show the validation curve during training:
   <sub>*Our verl-pipe extension (One-off Pipeline) masks away trainer and reward computation times,reducing training times by 1.4x for math and 2x for coding.*</sub>
 </div>
 
-To accelerate post-training, we develop `verl-pipe`, an asynchornous pipelined version of verl, that reduces end2end traiing times by up to **2x**. Our modifications are committed to `agentica-project/verl-pipeline`.
+To accelerate post-training, we develop `verl-pipe`, an asynchronous pipelined version of verl, that reduces end2end training times by up to **2x**. Such changes are implemented in`agentica-project/verl-pipeline`. See our [blog post](https://pretty-radio-b75.notion.site/DeepCoder-A-Fully-Open-Source-14B-Coder-at-O3-mini-Level-1cf81902c14680b3bee5eb349a512a51) for more details.
+
+We've trained `DeepCoder-1.5B-Preview` with `verl-pipe`, increasing LiveCodeBench scores from 17->25%.
 
 To install `verl-pipeline`, run:
 ```bash
@@ -181,7 +183,7 @@ cd verl-pipeline
 pip install -e .
 ```
 
-Example scripts to run training are located in `scripts/pipeline`. We note our `verl-pipeline` is 1-2 weeks behind verl main.
+Example scripts to run pipelined post-training are located in `scripts/pipeline`. We note our `verl-pipeline` is 1-2 weeks behind verl main.
 
 ## Acknowledgements
 
