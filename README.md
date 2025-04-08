@@ -113,7 +113,7 @@ ray start --address=[RAY_ADDRESS]
 ```
 We welcome the community to try out different models, context lengths, and RL parameters in our provided training scripts!
 
-## Evaluation
+## Evaluation ⚖️
 
 Our evaluation scripts automatically runs many replicas of vLLM. To run our evaluation scripts, run:
 ```bash
@@ -163,6 +163,25 @@ We also show the validation curve during training:
 
   <sub>*Figure 1: DeepScaleR 1.5B model's Pass@1 accuracy on AIME2024 as RL training progresses. At step 1040 and 1520, the context length is extended to 16K and 24K. For more details, see our [blog post](https://pretty-radio-b75.notion.site/DeepScaleR-Surpassing-O1-Preview-with-a-1-5B-Model-by-Scaling-RL-19681902c1468005bed8ca303013a4e2) .*</sub>
 </div>
+
+## Systems
+
+<div align="center">
+  <img src="figures/verl_pipeline.png" width="60%" />
+
+  <sub>*Our verl-pipe extension (One-off Pipeline) masks away trainer and reward computation times,reducing training times by 1.4x for math and 2x for coding.*</sub>
+</div>
+
+To accelerate post-training, we develop `verl-pipe`, an asynchornous pipelined version of verl, that reduces end2end traiing times by up to **2x**. Our modifications are committed to `agentica-project/verl-pipeline`.
+
+To install `verl-pipeline`, run:
+```bash
+git clone https://github.com/agentica-project/verl-pipeline.git
+cd verl-pipeline
+pip install -e .
+```
+
+Example scripts to run training are located in `scripts/pipeline`. We note our `verl-pipeline` is 1-2 weeks behind verl main.
 
 ## Acknowledgements
 
