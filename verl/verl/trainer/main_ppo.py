@@ -21,7 +21,7 @@ from verl.utils.reward_score import gsm8k, math
 from verl.trainer.ppo.ray_trainer import RayPPOTrainer
 
 
-from deepscaler.rewards.math_reward import deepscaler_reward_fn
+from rllm.rewards.rl_reward import rllm_reward_fn
 
 def _select_rm_score_fn(data_source):
     if data_source == 'openai/gsm8k':
@@ -29,7 +29,7 @@ def _select_rm_score_fn(data_source):
     elif data_source == 'lighteval/MATH':
         return math.compute_score
     else:
-        return deepscaler_reward_fn
+        return rllm_reward_fn
 
 
 class RewardManager():
@@ -78,7 +78,7 @@ class RewardManager():
             # select rm_score
             data_source = data_item.non_tensor_batch['data_source']
             compute_score_fn = _select_rm_score_fn(data_source)
-            score = compute_score_fn(solution_str=sequences_str, ground_truth=ground_truth)
+            score = compute_score_fn(data_source=data_source, llm_solution=sequences_str, ground_truth=ground_truth)
             
             # with print_lock:
             #     if data_source not in already_print_data_sources:
@@ -90,7 +90,7 @@ class RewardManager():
             return i, score, valid_response_length
 
         # Process items in parallel using ThreadPoolExecutor
-        with ThreadPoolExecutor(max_workers=96) as executor:
+        with ThreadPoolExecutor(max_workers=48) as executor:
             args = [(i, data[i], already_print_data_sources) for i in range(len(data))]
             results = list(executor.map(process_item, args))
 
@@ -153,7 +153,7 @@ def main_task(config):
     role_worker_mapping = {
         Role.ActorRollout: ray.remote(ActorRolloutRefWorker),
         Role.Critic: ray.remote(CriticWorker),
-        Role.RefPolicy: ray.remote(ActorRolloutRefWorker)
+        #Role.RefPolicy: ray.remote(ActorRolloutRefWorker)
     }
 
     global_pool_id = 'global_pool'
@@ -163,7 +163,7 @@ def main_task(config):
     mapping = {
         Role.ActorRollout: global_pool_id,
         Role.Critic: global_pool_id,
-        Role.RefPolicy: global_pool_id,
+        #Role.RefPolicy: global_pool_id,
     }
 
     # we should adopt a multi-source reward function here
@@ -188,7 +188,6 @@ def main_task(config):
     val_reward_fn = RewardManager(tokenizer=tokenizer, num_examine=1)
 
     resource_pool_manager = ResourcePoolManager(resource_pool_spec=resource_pool_spec, mapping=mapping)
-
     trainer = RayPPOTrainer(config=config,
                             tokenizer=tokenizer,
                             role_worker_mapping=role_worker_mapping,

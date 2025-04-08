@@ -122,7 +122,7 @@ def apply_kl_penalty(data: DataProto, kl_ctrl: core_algos.AdaptiveKLController, 
     return data, metrics
 
 
-def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_repeat=1):
+def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_repeat=1, mask_truncated_samples=False):
     # prepare response group
     # TODO: add other ways to estimate advantages
     if adv_estimator == 'gae':
@@ -148,7 +148,8 @@ def compute_advantage(data: DataProto, adv_estimator, gamma=1.0, lam=1.0, num_re
         response_mask = attention_mask[:, -response_length:]
         advantages, returns = core_algos.compute_grpo_outcome_advantage(token_level_rewards=token_level_rewards,
                                                                         eos_mask=response_mask,
-                                                                        index=index)
+                                                                        index=index,
+                                                                        mask_truncated_samples=mask_truncated_samples)
         data.batch['advantages'] = advantages
         data.batch['returns'] = returns
     else:
@@ -468,7 +469,8 @@ class RayPPOTrainer(object):
             resource_pool = self.resource_pool_manager.get_resource_pool(Role.ActorRollout)
             actor_rollout_cls = RayClassWithInitArgs(cls=self.role_worker_mapping[Role.ActorRollout],
                                                      config=self.config.actor_rollout_ref,
-                                                     role='actor_rollout')
+                                                     role='actor_rollout',
+                                                     reward_config=self.config.reward_model)
             self.resource_pool_to_cls[resource_pool]['actor_rollout'] = actor_rollout_cls
         else:
             raise NotImplementedError
@@ -489,7 +491,8 @@ class RayPPOTrainer(object):
             resource_pool = self.resource_pool_manager.get_resource_pool(Role.RefPolicy)
             ref_policy_cls = RayClassWithInitArgs(self.role_worker_mapping[Role.RefPolicy],
                                                   config=self.config.actor_rollout_ref,
-                                                  role='ref')
+                                                  role='ref',
+                                                  reward_config=self.config.reward_model)
             self.resource_pool_to_cls[resource_pool]['ref'] = ref_policy_cls
 
         # create a reward model if reward_fn is None
@@ -596,18 +599,13 @@ class RayPPOTrainer(object):
                 timing_raw = {}
 
                 # pop those keys for generation
-                gen_batch = batch.pop(batch_keys=['input_ids', 'attention_mask', 'position_ids'])
+                batch.non_tensor_batch['uid'] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))],
+                                        dtype=object)
 
                 with _timer('step', timing_raw):
                     # generate a batch
                     with _timer('gen', timing_raw):
-                        gen_batch_output = self.actor_rollout_wg.generate_sequences(gen_batch)
-
-                    # This code matches a prompt ID with its N responses.
-                    batch.non_tensor_batch['uid'] = np.array([str(uuid.uuid4()) for _ in range(len(batch.batch))],
-                                                             dtype=object)
-                    batch = batch.repeat(repeat_times=self.config.actor_rollout_ref.rollout.n, interleave=True)
-                    batch = batch.union(gen_batch_output)
+                        batch = self.actor_rollout_wg.generate_sequences(batch)
 
                     # compute values
                     if self.use_critic:
@@ -620,10 +618,12 @@ class RayPPOTrainer(object):
                         if self.use_rm:
                             reward_tensor = self.rm_wg.compute_rm_score(batch)
                             batch = batch.union(reward_tensor)
-
-                        reward_tensor = self.reward_fn(batch)
-                        batch.batch['token_level_scores'] = reward_tensor
-
+                        
+                        if not self.config.actor_rollout_ref.rollout.compute_reward:
+                            reward_tensor = self.reward_fn(batch)
+                            batch.batch['token_level_scores'] = reward_tensor
+                        else:
+                            reward_tensor = batch.batch['token_level_scores']
                         # Rejection sampling based on rewards
                         # Group rewards by uid
                         uids = batch.non_tensor_batch['uid']
@@ -646,6 +646,7 @@ class RayPPOTrainer(object):
                         # Log to metrics
                         metrics['batch/solve_none'] = solve_none
                         metrics['batch/solve_all'] = solve_all
+                        metrics['batch/solve_partial'] = len(unique_uids) - solve_none - solve_all
 
 
                         if self.config.trainer.rejection_sample:
@@ -700,7 +701,8 @@ class RayPPOTrainer(object):
                                                   adv_estimator=self.config.algorithm.adv_estimator,
                                                   gamma=self.config.algorithm.gamma,
                                                   lam=self.config.algorithm.lam,
-                                                  num_repeat=self.config.actor_rollout_ref.rollout.n)
+                                                  num_repeat=self.config.actor_rollout_ref.rollout.n,
+                                                  mask_truncated_samples=self.config.algorithm.mask_truncated_samples)
 
                     # balance the number of valid tokens on each dp rank.
                     # Note that this breaks the order of data inside the batch.

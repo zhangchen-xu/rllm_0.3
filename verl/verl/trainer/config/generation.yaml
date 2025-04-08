@@ -21,7 +21,7 @@ rollout:
   temperature: 0.6
   top_k: -1 # 0 for hf rollout, -1 for vllm rollout
   top_p: 0.95
-  prompt_length: 1536
+  prompt_length: 2048
   response_length: 32768
   # for vllm rollout
   dtype: bfloat16 # should align with FSDP
@@ -56,6 +56,10 @@ actor:
     grad_offload: False
     optimizer_offload: False
     fsdp_size: -1
+  ppo_mini_batch_size: 256
+  ppo_micro_batch_size: 64
+  use_dynamic_bsz: False
+  ppo_max_token_len_per_gpu: 16384 # n * ${data.max_prompt_length} + ${data.max_response_length}
   optim:
     lr: 1e-6
     lr_warmup_steps_ratio: 0.  # the total steps will be injected during runtime
