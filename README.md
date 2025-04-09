@@ -174,7 +174,7 @@ We also show the validation curve during training:
 
 To accelerate post-training, we develop `verl-pipe`, an asynchronous pipelined version of verl, that reduces end2end training times by up to **2x**. Such changes are implemented in`agentica-project/verl-pipeline`. See our [blog post](https://pretty-radio-b75.notion.site/DeepCoder-A-Fully-Open-Source-14B-Coder-at-O3-mini-Level-1cf81902c14680b3bee5eb349a512a51) for more details.
 
-We've trained `DeepCoder-1.5B-Preview` with `verl-pipe`, increasing LiveCodeBench scores from 17->25%.
+We've trained `DeepCoder-1.5B-Preview`, not `DeepCodeR-14B-Preview`, with `verl-pipe`, increasing LiveCodeBench scores from 17->25%.
 
 To install `verl-pipeline`, run:
 ```bash
@@ -198,7 +198,7 @@ Example scripts to run pipelined post-training are located in `scripts/pipeline`
 ```bibtex
 @misc{deepcoder2025,
   title={DeepCoder: A Fully Open-Source 14B Coder at O3-mini Level},
-  author={Michael Luo, Sijun Tan, Roy Huang, Xiaoxiang Shi, Rachel Xin, Colin Cai, Ameen Patel, Alpay Ariyak, Qingyang Wu, Ce Zhang, Li Erran Li, Raluca Ada Popa, Ion Stoica, Tianjun Zhang},
+  author={Michael Luo, Sijun Tan, Roy Huang, Xiaoxiang Shi, Rachel Xin, Colin Cai, Ameen Patel, Alpay Ariyak, Qingyang Wu, Ce Zhang, Li Erran Li, Raluca Ada Popa, Ion Stoica},
   howpublished={\url{https://pretty-radio-b75.notion.site/DeepCoder-A-Fully-Open-Source-14B-Coder-at-O3-mini-Level-1cf81902c14680b3bee5eb349a512a51}},
   note={Notion Blog},
   year={2025}
