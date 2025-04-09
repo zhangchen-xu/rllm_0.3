@@ -137,7 +137,7 @@ We evaluate `Deepcoder-14B-Preview` on LiveCodeBench (LCB), Codeforces, and Huma
 | **O1-Preview** | 42.7 | 1658 | 88.5 | 89 | 40.0 |
 | **Deepseek-R1** | 62.8 | 1948 | 95.4 | 92.6 | 79.8 |
 | **Llama-4-Behemoth** | 49.4 | - | - | - | - |
-| **DeepCoder-1.5B-Preview** | 25.1 | 963 | 28.5 | 73.0 | 43.1 |
+| **DeepCoder-1.5B-Preview** | 25.1 | 963 | 28.5 | 73.0 | - |
 | **Deepseek-R1-Distill-Qwen-1.5B** | 16.9 | 615 | 1.9 | 58.3 | 28.8 |
 
 ### DeepScaler
